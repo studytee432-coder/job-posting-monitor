@@ -16,7 +16,7 @@ def check_password():
 
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        if hmac.compare_constant_time(
+        if hmac.compare_digest(
             st.session_state["password"],
             st.secrets["auth"]["password"]
         ) and st.session_state["username"] == st.secrets["auth"]["username"]:
