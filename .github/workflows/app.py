@@ -7,8 +7,9 @@ import pandas as pd
 from pathlib import Path
 import hmac
 from screenshotone import Client, TakeOptions
+from pyzotero import zotero  # New import for Zotero integration
 
-# Page config - wide layout for better use of space
+# Page config
 st.set_page_config(page_title="Job Posting Monitor", page_icon="🔍", layout="wide")
 
 # Authentication
@@ -41,13 +42,12 @@ def check_password():
         return True
 
 if not check_password():
-    st.stop()  # Stop execution until authenticated
+    st.stop()
 
 # Main App
 st.title("🔍 Automated Job Posting Monitor")
 st.markdown("""
-Welcome to your personal job monitoring dashboard!  
-Track changes on company career pages and get visual alerts (screenshots) when new postings appear.
+Welcome, Ritika! Track job pages in Dublin and beyond. Now with Visa Sponsorship checks and optional Zotero integration for long-term data retention.
 """)
 
 # Directories
@@ -67,26 +67,26 @@ if INPUT_FILE.exists():
 else:
     df_targets = pd.DataFrame(columns=['Company Name', 'URL', 'Role'])
 
-# Use tabs for main sections
+# Tabs
 tab_overview, tab_targets, tab_run, tab_history = st.tabs([
     "📊 Overview", 
     "🎯 Manage Targets", 
     "🚀 Run Monitoring", 
-    "📜 History & Screenshots"
+    "📜 History & Archives"
 ])
 
 with tab_overview:
     st.header("Dashboard Overview")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Targets Being Monitored", len(df_targets))
+        st.metric("Targets Monitored", len(df_targets))
     with col2:
         if OUTPUT_FILE.exists():
             history_df = pd.read_excel(OUTPUT_FILE)
             changes = len(history_df[history_df['Status'].str.contains("Change|First", na=False)])
-            st.metric("Total Changes Detected", changes)
+            st.metric("Changes Detected", changes)
         else:
-            st.metric("Total Changes Detected", 0)
+            st.metric("Changes Detected", 0)
     with col3:
         if OUTPUT_FILE.exists():
             last_run = pd.read_excel(OUTPUT_FILE)['Date'].max()
@@ -95,17 +95,46 @@ with tab_overview:
             st.metric("Last Run", "Never")
 
     st.markdown("### Quick Tips")
-    with st.expander("How to use this app effectively"):
+    with st.expander("How to get started"):
         st.write("""
-        - Add company career pages (not single-job links) in **Manage Targets**.
-        - Click **Run Monitoring** daily or whenever you want to check.
-        - View changes with screenshots in **History & Screenshots**.
-        - Screenshots are taken automatically on changes (optional).
+        - Add career pages in **Manage Targets** (e.g., for Dublin jobs).
+        - Run checks in **Run Monitoring** – now detects Visa Sponsorship!
+        - View archives in **History** with screenshots or Zotero links.
+        - For long-term retention, enable Zotero (setup in secrets).
         """)
 
 with tab_targets:
     st.header("🎯 Manage Monitoring Targets")
-    st.markdown("Add, edit, or delete job pages you want to track. Use company career pages for best results.")
+    st.markdown("Add/edit/delete targets. Optionally sync from Zotero collection for centralized management.")
+
+    # Zotero Sync Option
+    use_zotero = st.checkbox("Use Zotero for Targets & Archives (enable in secrets)")
+    if use_zotero:
+        try:
+            zot = zotero.Zotero(
+                st.secrets["zotero"]["library_id"],
+                st.secrets["zotero"]["library_type"],
+                st.secrets["zotero"]["api_key"]
+            )
+            if st.button("🔄 Sync Targets from Zotero"):
+                items = zot.collection_items(st.secrets["zotero"]["collection_id"])
+                new_targets = []
+                for item in items:
+                    if item['meta']['itemType'] == 'webpage':
+                        company = item['data'].get('title', 'Unknown')
+                        url = item['data'].get('url', '')
+                        role = item['data'].get('extra', '')  # Use extra for role
+                        if url:
+                            new_targets.append({'Company Name': company, 'URL': url, 'Role': role})
+                if new_targets:
+                    df_targets = pd.DataFrame(new_targets)
+                    df_targets.to_excel(INPUT_FILE, index=False)
+                    st.success(f"Synced {len(new_targets)} targets from Zotero!")
+                    st.rerun()
+                else:
+                    st.info("No webpage items found in Zotero collection.")
+        except Exception as e:
+            st.warning(f"Zotero sync failed: {e}. Check secrets for api_key, library_id, library_type, collection_id.")
 
     edited_targets = st.data_editor(
         df_targets,
@@ -114,7 +143,7 @@ with tab_targets:
         hide_index=True,
         column_config={
             "Company Name": st.column_config.TextColumn("Company Name", required=True),
-            "URL": st.column_config.LinkColumn("Career Page URL", required=True),
+            "URL": st.column_config.LinkColumn("Career/Job URL", required=True),
             "Role": st.column_config.TextColumn("Role/Keyword", required=True),
         }
     )
@@ -123,35 +152,45 @@ with tab_targets:
     with col_save:
         if st.button("💾 Save Targets", type="primary", use_container_width=True):
             if edited_targets.duplicated(subset=['Company Name', 'Role']).any():
-                st.error("Duplicate Company + Role combinations found. Each must be unique.")
+                st.error("Duplicates found.")
             elif edited_targets.isnull().values.any():
-                st.error("All fields are required.")
+                st.error("Fill all fields.")
             else:
                 edited_targets.to_excel(INPUT_FILE, index=False)
-                st.success("Targets saved successfully!")
+                st.success("Saved!")
                 st.rerun()
     with col_info:
-        st.info("Tip: Use direct company career URLs (e.g., google.com/careers) to avoid blocking.")
+        st.info("Use company career URLs to avoid blocks. For Visa checks, pages must mention 'visa sponsorship' explicitly.")
 
 with tab_run:
     st.header("🚀 Run Monitoring Check")
-    st.markdown("Click below to scan all targets for changes. This may take a minute.")
+    st.markdown("Scan targets for changes. Adds 'Visa Sponsorship' column based on page content.")
 
-    take_screenshots = st.checkbox("📸 Take screenshots on changes/first run (uses free API credits)", value=True)
+    take_archives = st.checkbox("📸 Take Screenshot / Archive to Zotero on Changes", value=True)
 
-    if st.button("🔄 Run Monitoring Now", type="primary", use_container_width=True):
+    if st.button("🔄 Run Now", type="primary", use_container_width=True):
         if len(edited_targets) == 0:
-            st.warning("No targets added yet. Go to **Manage Targets** first.")
+            st.warning("Add targets first.")
         else:
-            with st.spinner("Fetching pages and comparing..."):
+            with st.spinner("Running..."):
                 current_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 results = []
                 screenshot_client = None
-                if take_screenshots:
+                zot = None
+                if take_archives:
                     try:
                         screenshot_client = Client(st.secrets["screenshotone"]["access_key"], st.secrets["screenshotone"]["secret_key"])
-                    except Exception:
-                        st.warning("Screenshot API keys missing. Screenshots disabled.")
+                    except:
+                        pass
+                    if use_zotero:
+                        try:
+                            zot = zotero.Zotero(
+                                st.secrets["zotero"]["library_id"],
+                                st.secrets["zotero"]["library_type"],
+                                st.secrets["zotero"]["api_key"]
+                            )
+                        except:
+                            st.warning("Zotero setup incomplete.")
 
                 for _, row in edited_targets.iterrows():
                     company = row['Company Name']
@@ -161,15 +200,29 @@ with tab_run:
                     filename = f"{company.replace(' ', '_').replace('/', '-')}_{role.replace(' ', '_').replace('/', '-')}.html"
                     new_path = LATEST_SNAPSHOT_DIR / filename
                     old_path = OLD_SNAPSHOT_DIR / filename
+                    archive_dir = BASE_DIR / 'Archives' / current_date.replace(':', '-')
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    archive_path = archive_dir / filename
 
                     try:
                         response = requests.get(url, timeout=20, headers={'User-Agent': 'Mozilla/5.0'})
                         response.raise_for_status()
+                        html_content = response.text
                         with open(new_path, 'w', encoding='utf-8') as f:
-                            f.write(response.text)
+                            f.write(html_content)
+                        # Archive copy for long-term retention
+                        shutil.copy(new_path, archive_path)
                     except Exception as e:
-                        results.append({'Company Name': company, 'URL': url, 'Role': role, 'Date': current_date, 'Status': f"Error: {e}", 'Screenshot': None})
+                        results.append({
+                            'Company Name': company, 'URL': url, 'Role': role, 'Date': current_date,
+                            'Status': f"Error: {e}", 'Visa Sponsorship': 'N/A', 'Archive': None
+                        })
                         continue
+
+                    # Visa Sponsorship Check
+                    visa_keywords = ["visa sponsorship", "sponsors visa", "visa support", "work visa", "sponsor h1b", "sponsor visa"]
+                    visa_mention = any(keyword.lower() in html_content.lower() for keyword in visa_keywords)
+                    visa_status = "Yes" if visa_mention else "No"
 
                     if not old_path.exists():
                         has_changed = True
@@ -179,22 +232,40 @@ with tab_run:
                             has_changed = old_f.read() != new_f.read()
                         status = "Change detected! 🚨" if has_changed else "No change"
 
-                    screenshot_path = None
-                    if has_changed and take_screenshots and screenshot_client:
-                        try:
-                            options = TakeOptions.url(url).full_page(True).block_cookie_banners(True)
-                            image = screenshot_client.take(options)
-                            screenshot_filename = f"{current_date.replace(':', '-')}_{company}_{role}.png"
-                            screenshot_path = SCREENSHOTS_DIR / screenshot_filename
-                            with open(screenshot_path, 'wb') as f:
-                                f.write(image.read())
-                            status += " (Screenshot captured)"
-                        except Exception as e:
-                            st.warning(f"Screenshot failed for {company}: {e}")
+                    archive_link = None
+                    if has_changed and take_archives:
+                        if zot:
+                            try:
+                                item = zot.item_template('webpage')
+                                item['title'] = f"{company} - {role} ({current_date})"
+                                item['url'] = url
+                                item['extra'] = role
+                                new_item = zot.create_items([item])
+                                item_key = new_item['successful']['0']['key']
+                                # Attach HTML snapshot
+                                zot.attachment_simple([str(archive_path)], item_key)
+                                archive_link = f"https://www.zotero.org/{st.secrets['zotero']['library_type']}s/{st.secrets['zotero']['library_id']}/items/{item_key}"
+                                status += " (Archived to Zotero)"
+                            except Exception as e:
+                                st.warning(f"Zotero archive failed for {company}: {e}")
+                        elif screenshot_client:
+                            try:
+                                options = TakeOptions.url(url).full_page(True).block_cookie_banners(True)
+                                image = screenshot_client.take(options)
+                                screenshot_filename = f"{current_date.replace(':', '-')}_{company}_{role}.png"
+                                screenshot_path = SCREENSHOTS_DIR / screenshot_filename
+                                with open(screenshot_path, 'wb') as f:
+                                    f.write(image.read())
+                                archive_link = str(screenshot_path)
+                                status += " (Screenshot captured)"
+                            except Exception as e:
+                                st.warning(f"Screenshot failed: {e}")
 
-                    results.append({'Company Name': company, 'URL': url, 'Role': role, 'Date': current_date, 'Status': status, 'Screenshot': str(screenshot_path) if screenshot_path else None})
+                    results.append({
+                        'Company Name': company, 'URL': url, 'Role': role, 'Date': current_date,
+                        'Status': status, 'Visa Sponsorship': visa_status, 'Archive': archive_link
+                    })
 
-                # Save results
                 results_df = pd.DataFrame(results)
                 if OUTPUT_FILE.exists():
                     existing = pd.read_excel(OUTPUT_FILE)
@@ -203,14 +274,13 @@ with tab_run:
                     full_df = results_df
                 full_df.to_excel(OUTPUT_FILE, index=False)
 
-                # Move snapshots
-                shutil.rmtree(OLD_SNAPSHOT_DIR)
+                shutil.rmtree(OLD_SNAPSHOT_DIR, ignore_errors=True)
                 shutil.copytree(LATEST_SNAPSHOT_DIR, OLD_SNAPSHOT_DIR)
                 shutil.rmtree(LATEST_SNAPSHOT_DIR)
-                LATEST_SNAPSHOT_DIR.mkdir()
+                LATEST_SNAPSHOT_DIR.mkdir(exist_ok=True)
 
-                st.success("Monitoring complete!")
-                st.subheader("Latest Run Results")
+                st.success("Complete!")
+                st.subheader("Latest Results")
                 st.dataframe(results_df, use_container_width=True)
 
 with tab_history:
@@ -219,28 +289,27 @@ with tab_history:
         history_df = pd.read_excel(OUTPUT_FILE)
 
         st.subheader("Edit / Clean History")
-        st.markdown("You can delete old rows or edit entries here.")
         edited_history = st.data_editor(
             history_df.sort_values('Date', ascending=False),
             num_rows="dynamic",
             use_container_width=True,
             column_config={
-                "Screenshot": st.column_config.ImageColumn("Screenshot Preview", width="medium"),
+                "Archive": st.column_config.ImageColumn("Archive Preview", width="medium") if not use_zotero else st.column_config.LinkColumn("Zotero Link"),
             }
         )
 
         if st.button("💾 Save Edited History", type="primary"):
             edited_history.to_excel(OUTPUT_FILE, index=False)
-            st.success("History updated!")
+            st.success("Updated!")
             st.rerun()
 
         st.markdown("---")
-        st.subheader("Filter & View History")
+        st.subheader("Filter & View")
         col1, col2 = st.columns(2)
         with col1:
-            company_filter = st.multiselect("Filter by Company", ["All"] + sorted(history_df['Company Name'].unique()))
+            company_filter = st.multiselect("Filter Company", ["All"] + sorted(history_df['Company Name'].unique()))
         with col2:
-            status_filter = st.multiselect("Filter by Status", ["All"] + sorted(history_df['Status'].unique()))
+            status_filter = st.multiselect("Filter Status", ["All"] + sorted(history_df['Status'].unique()))
 
         filtered = history_df
         if "All" not in company_filter and company_filter:
@@ -250,25 +319,29 @@ with tab_history:
 
         st.dataframe(filtered.sort_values('Date', ascending=False), use_container_width=True)
 
-        st.markdown("### Screenshots of Changes")
+        st.markdown("### Archives of Changes")
         change_rows = filtered[filtered['Status'].str.contains("Change|First", na=False)]
         if not change_rows.empty:
             for _, row in change_rows.iterrows():
-                if pd.notna(row['Screenshot']) and os.path.exists(row['Screenshot']):
-                    st.image(row['Screenshot'], caption=f"{row['Company Name']} - {row['Role']} ({row['Date']})", use_column_width=True)
+                if pd.notna(row['Archive']):
+                    if use_zotero:
+                        st.link_button("View in Zotero", row['Archive'])
+                    else:
+                        st.image(row['Archive'], caption=f"{row['Company Name']} - {row['Date']}", use_column_width=True)
         else:
-            st.info("No changes with screenshots yet.")
+            st.info("No archives yet.")
 
         csv = filtered.to_csv(index=False).encode()
-        st.download_button("📥 Download Filtered History (CSV)", csv, "job_monitor_history.csv")
-    else:
-        st.info("No history yet. Add targets and run monitoring first.")
+        st.download_button("📥 Download CSV", csv, "history.csv")
 
-# Sidebar footer
+    else:
+        st.info("No history. Run monitoring.")
+
+# Sidebar
 st.sidebar.markdown("---")
 st.sidebar.header("Account")
 if st.sidebar.button("🚪 Logout"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-st.sidebar.info("App runs in the cloud – check anytime from any device!")
+st.sidebar.info("Cloud-based app with persistent data. Zotero integrates for long-term archives!")
