@@ -103,6 +103,15 @@ with tab_overview:
 with tab_targets:
     st.header("🎯 Manage Monitoring Targets")
 
+    # Initialize session state for targets if not exists
+    if 'df_targets' not in st.session_state:
+        if INPUT_FILE.exists():
+            st.session_state['df_targets'] = pd.read_excel(INPUT_FILE).astype(str).fillna("")
+        else:
+            st.session_state['df_targets'] = pd.DataFrame(columns=['Company Name', 'URL', 'Role', 'Zotero Key'])
+
+    df_targets = st.session_state['df_targets']
+
     use_zotero = st.checkbox("Enable Zotero Integration", value=True)
     zot = None
     selected_collection_id = None
@@ -122,54 +131,56 @@ with tab_targets:
         except Exception as e:
             st.warning(f"Zotero connection failed: {str(e)}")
 
-    if use_zotero and zot:
-        if st.button("🔄 Sync from Zotero"):
-            try:
-                if selected_collection_id:
-                    items = zot.everything(zot.collection_items(selected_collection_id, itemtype="webpage"))
+    if use_zotero and zot and st.button("🔄 Sync from Zotero"):
+        try:
+            if selected_collection_id:
+                items = zot.everything(zot.collection_items(selected_collection_id, itemtype="webpage"))
+            else:
+                items = zot.everything(zot.items(itemtype="webpage"))
+
+            synced_targets = []
+            for item in items:
+                company = item['data'].get('title', 'Unknown')
+                url = item['data'].get('url', '')
+                role = item['data'].get('extra', '')
+                key = item['key']
+                if url:
+                    synced_targets.append({
+                        'Company Name': company,
+                        'URL': url,
+                        'Role': role,
+                        'Zotero Key': key
+                    })
+
+            if synced_targets:
+                df_synced = pd.DataFrame(synced_targets).astype(str).fillna("")
+
+                # Merge with existing (keep Zotero Key as key)
+                if not df_targets.empty:
+                    df_targets = df_targets.merge(
+                        df_synced,
+                        on='Zotero Key',
+                        how='outer',
+                        suffixes=('', '_new')
+                    )
+                    for col in ['Company Name', 'URL', 'Role']:
+                        df_targets[col] = df_targets[f'{col}_new'].combine_first(df_targets[col])
+                        df_targets.drop(f'{col}_new', axis=1, inplace=True, errors='ignore')
                 else:
-                    items = zot.everything(zot.items(itemtype="webpage"))
+                    df_targets = df_synced
 
-                synced_targets = []
-                for item in items:
-                    company = item['data'].get('title', 'Unknown')
-                    url = item['data'].get('url', '')
-                    role = item['data'].get('extra', '')
-                    key = item['key']
-                    if url:
-                        synced_targets.append({
-                            'Company Name': company,
-                            'URL': url,
-                            'Role': role,
-                            'Zotero Key': key
-                        })
+                # Save to file and update session state
+                df_targets.to_excel(INPUT_FILE, index=False)
+                st.session_state['df_targets'] = df_targets
 
-                if synced_targets:
-                    df_synced = pd.DataFrame(synced_targets)
-                    df_synced = df_synced.astype(str).fillna("")
+                st.success(f"Synced {len(synced_targets)} items from Zotero!")
+                st.rerun()  # ← This is the key: force rerun so editor shows new data
+            else:
+                st.info("No webpage items found in the selected scope.")
+        except Exception as e:
+            st.error(f"Sync failed: {str(e)}")
 
-                    if not df_targets.empty:
-                        df_targets = df_targets.merge(
-                            df_synced,
-                            on='Zotero Key',
-                            how='outer',
-                            suffixes=('', '_new')
-                        )
-                        for col in ['Company Name', 'URL', 'Role']:
-                            df_targets[col] = df_targets[f'{col}_new'].combine_first(df_targets[col])
-                            df_targets.drop(f'{col}_new', axis=1, inplace=True, errors='ignore')
-                    else:
-                        df_targets = df_synced
-
-                    df_targets.to_excel(INPUT_FILE, index=False)
-                    st.success(f"Synced {len(synced_targets)} items from Zotero!")
-                    st.rerun()
-                else:
-                    st.info("No webpage items found.")
-            except Exception as e:
-                st.error(f"Sync failed: {str(e)}")
-
-    # Data editor – Zotero Key is now EDITABLE (read/write)
+    # Display editor with current session state data
     edited_targets = st.data_editor(
         df_targets,
         num_rows="dynamic",
@@ -179,7 +190,7 @@ with tab_targets:
             "Company Name": st.column_config.TextColumn("Company Name", required=True),
             "URL": st.column_config.LinkColumn("Career/Job URL", required=True),
             "Role": st.column_config.TextColumn("Role/Keyword", required=True),
-            "Zotero Key": st.column_config.TextColumn("Zotero Key", disabled=False),  # ← Changed to editable
+            "Zotero Key": st.column_config.TextColumn("Zotero Key", disabled=False),  # read/write as requested
         }
     )
 
@@ -187,14 +198,11 @@ with tab_targets:
     with col_save:
         if st.button("💾 Save Targets & Sync to Zotero", type="primary", use_container_width=True):
             edited_targets.to_excel(INPUT_FILE, index=False)
+            st.session_state['df_targets'] = edited_targets
             st.success("Targets saved locally!")
             st.rerun()
     with col_info:
-        st.info(
-            "Zotero Key is now **editable**. "
-            "You can manually enter or modify Zotero item keys if needed. "
-            "Be careful – invalid keys may break sync."
-        )
+        st.info("Zotero Key is editable. You can manually enter/modify keys if needed.")
 
 # Run Monitoring tab (unchanged)
 with tab_run:
