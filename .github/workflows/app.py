@@ -362,29 +362,21 @@ with tab_run:
 
                     st.success("Monitoring complete!")
 
-                    # ── NEW: Show only New / Changed rows first ──────────────────────
-                    st.subheader("New / Changed Information (Highlights only)")
+                    # ── NEW: Table showing only NEW / CHANGED unique instances ──────
+                    st.subheader("New / Changed Information (Unique Instances Only)")
                     changed_df = df_results[df_results['Status'].str.contains("Change|First", na=False)]
                     if not changed_df.empty:
-                        st.dataframe(changed_df, use_container_width=True)
+                        # Remove duplicates within this run (unique by Company + URL + Role)
+                        changed_unique = changed_df.drop_duplicates(subset=['Company Name', 'URL', 'Role'])
+                        st.dataframe(changed_unique, use_container_width=True)
                     else:
                         st.info("No new or changed pages detected in this run.")
 
-                    # Full results below
+                    # Full results (for reference)
                     st.subheader("Full Scan Results")
                     st.dataframe(df_results, use_container_width=True)
                 else:
                     st.error("No results generated – check URLs and network.")
-
-    # Show latest results (persistent)
-    if 'latest_results' in st.session_state:
-        st.subheader("Latest Run Results")
-        st.dataframe(st.session_state['latest_results'], use_container_width=True)
-    elif OUTPUT_FILE.exists():
-        st.subheader("Previous Results")
-        st.dataframe(pd.read_excel(OUTPUT_FILE).sort_values('Date', ascending=False), use_container_width=True)
-    else:
-        st.info("Run monitoring to see results.")
 # ── History & Archives Tab ─────────────────────────────────────────────────────
 with tab_history:
     st.header("📜 History & Archives")
