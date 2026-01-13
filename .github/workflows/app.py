@@ -85,47 +85,82 @@ with tab_overview:
     with col1:
         st.metric("Targets Monitored", len(df_targets))
     with col2:
-        changes = 0
         if OUTPUT_FILE.exists():
-            history = pd.read_excel(OUTPUT_FILE)
-            changes = len(history[history['Status'].str.contains("Change|First", na=False)])
-        st.metric("Changes Detected", changes)
+            history_df = pd.read_excel(OUTPUT_FILE)
+            changes = len(history_df[history_df['Status'].str.contains("Change|First", na=False)])
+            st.metric("Changes Detected", changes)
+        else:
+            st.metric("Changes Detected", 0)
     with col3:
-        last = "Never"
         if OUTPUT_FILE.exists():
-            last = pd.read_excel(OUTPUT_FILE)['Date'].max() or "Never"
-        st.metric("Last Run", last)
+            last_run = pd.read_excel(OUTPUT_FILE)['Date'].max()
+            st.metric("Last Run", last_run if pd.notna(last_run) else "Never")
+        else:
+            st.metric("Last Run", "Never")
 
-    # All websites + latest Visa status
+    # ── All Monitored Websites & Visa Sponsorship Status ───────────────────────
     st.markdown("### All Monitored Websites & Visa Sponsorship Status")
+
     if OUTPUT_FILE.exists():
         history = pd.read_excel(OUTPUT_FILE)
+
+        # Get latest record per unique target
         latest = history.sort_values('Date', ascending=False)\
                         .drop_duplicates(subset=['Company Name', 'URL', 'Role'], keep='first')
 
-        overview_df = df_targets.merge(
+        # Merge — keep original URL from targets (avoid truncated ones from history)
+        overview_df = df_targets[['Company Name', 'URL', 'Role']].copy()
+        overview_df = overview_df.merge(
             latest[['Company Name', 'URL', 'Role', 'Visa Sponsorship', 'Date']],
             on=['Company Name', 'URL', 'Role'],
-            how='left'
-        ).fillna({'Visa Sponsorship': 'Not checked yet', 'Date': '-'})
+            how='left',
+            suffixes=('', '_hist')
+        )
+
+        # Use original URL if available, fallback to history URL only if missing
+        overview_df['URL'] = overview_df['URL'].combine_first(overview_df['URL_hist'])
+        overview_df = overview_df.drop(columns=['URL_hist'], errors='ignore')
+
+        # Final clean-up
+        overview_df = overview_df.fillna({
+            'Visa Sponsorship': 'Not checked yet',
+            'Date': '—'
+        })
 
         overview_df = overview_df[['Company Name', 'Role', 'URL', 'Visa Sponsorship', 'Date']]
         overview_df = overview_df.rename(columns={'Date': 'Last Checked'})
 
+        # Better styling with high-contrast colors
+        def highlight_visa(val):
+            if val == 'Yes':
+                return 'background-color: #28a745; color: white; font-weight: bold;'
+            elif val == 'No':
+                return 'background-color: #dc3545; color: white;'
+            elif val == 'Not checked yet':
+                return 'background-color: #ffc107; color: black;'
+            return ''
+
         st.dataframe(
-            overview_df.style.map(
-                lambda v: 'background-color: #d4edda' if v == 'Yes' else
-                          'background-color: #f8d7da' if v == 'No' else
-                          'background-color: #fff3cd',
-                subset=['Visa Sponsorship']
-            ),
-            use_container_width=True
+            overview_df.style.map(highlight_visa, subset=['Visa Sponsorship'])
+                             .set_properties(**{'text-align': 'left'})
+                             .set_table_styles([
+                                 {'selector': 'th', 'props': [('font-weight', 'bold'), ('text-align', 'center')]},
+                                 {'selector': 'td', 'props': [('white-space', 'normal'), ('word-break', 'break-word')]}
+                             ]),
+            use_container_width=True,
+            column_config={
+                "URL": st.column_config.LinkColumn("URL", display_text=lambda x: x[:60] + "..." if len(x) > 60 else x),
+                "Visa Sponsorship": st.column_config.Column("Visa Sponsorship", width="medium"),
+                "Last Checked": st.column_config.Column("Last Checked", width="medium")
+            }
         )
 
         if 'Yes' in overview_df['Visa Sponsorship'].values:
-            st.success("Some positions currently offer Visa Sponsorship!")
+            st.success("Some positions currently appear to offer Visa Sponsorship!")
+        else:
+            st.info("No confirmed Visa Sponsorship found in the latest checks.")
     else:
-        st.info("Run monitoring to see visa status overview.")
+        st.info("No monitoring data yet. Run a check in the 'Run Monitoring' tab to populate this overview.")
 
 # ── Manage Targets Tab ─────────────────────────────────────────────────────────
 with tab_targets:
