@@ -99,7 +99,7 @@ with tab_overview:
             st.metric("Last Run", "Never")
 
     # ── All Monitored Websites & Visa Sponsorship Status ───────────────────────
-    st.markdown("### All Monitored Websites & Visa Sponsorship Status")
+    st.markdown("### All Monitored Websites & Visa Sponsorship Evidence")
 
     if OUTPUT_FILE.exists():
         history = pd.read_excel(OUTPUT_FILE)
@@ -111,15 +111,17 @@ with tab_overview:
         # Merge — prioritize original clean URL from targets
         overview_df = df_targets[['Company Name', 'URL', 'Role']].copy()
         overview_df = overview_df.merge(
-            latest[['Company Name', 'URL', 'Role', 'Visa Sponsorship', 'Date']],
+            latest[['Company Name', 'URL', 'Role', 'Visa Sponsorship', 'Visa Evidence', 'Date']],
             on=['Company Name', 'URL', 'Role'],
             how='left'
         )
 
         overview_df['Visa Sponsorship'] = overview_df['Visa Sponsorship'].fillna('Not checked yet')
+        overview_df['Visa Evidence'] = overview_df['Visa Evidence'].fillna('—')
         overview_df['Date'] = overview_df['Date'].fillna('—')
 
-        overview_df = overview_df[['Company Name', 'Role', 'URL', 'Visa Sponsorship', 'Date']]
+        # Final columns: Company → URL → Visa Status → Evidence → Last Checked
+        overview_df = overview_df[['Company Name', 'URL', 'Visa Sponsorship', 'Visa Evidence', 'Date']]
         overview_df = overview_df.rename(columns={'Date': 'Last Checked'})
 
         # High-contrast, readable styling
@@ -144,10 +146,10 @@ with tab_overview:
                                  {'selector': 'th', 'props': [('font-weight', 'bold'), ('text-align', 'center')]},
                              ]),
             use_container_width=True,
-            # Removed problematic display_text lambda — Streamlit will truncate long URLs automatically
             column_config={
                 "URL": st.column_config.LinkColumn("URL"),
                 "Visa Sponsorship": st.column_config.Column(width="medium"),
+                "Visa Evidence": st.column_config.Column(width="large"),
                 "Last Checked": st.column_config.Column(width="medium")
             }
         )
