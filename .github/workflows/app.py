@@ -250,39 +250,27 @@ with tab_targets:
 # ── Run Monitoring Tab ─────────────────────────────────────────────────────────
 with tab_run:
     st.header("🚀 Run Monitoring Check")
-    st.markdown("This will scan every target. Progress & errors will appear below.")
+    st.markdown("Scans all targets. You should see progress for each target below.")
 
     take_archives = st.checkbox("Archive changes (Zotero or Screenshot)", value=True)
 
     if st.button("🔄 Run Now", type="primary", use_container_width=True):
         if df_targets.empty:
-            st.warning("No targets. Add some in Manage Targets first.")
+            st.warning("No targets added. Go to Manage Targets first.")
         else:
-            with st.spinner("Running full scan..."):
+            with st.spinner("Checking targets..."):
                 current_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 results = []
-                success_count = 0
-                fail_count = 0
+                error_count = 0
 
-                st.markdown("**Scan Progress:**")
+                st.write("Starting scan...")
 
                 for idx, row in df_targets.iterrows():
                     company = row['Company Name']
-                    url = row['URL'].strip()  # clean any whitespace
+                    url = row['URL'].strip()
                     role = row['Role']
 
-                    if not url or not url.startswith(('http://', 'https://')):
-                        fail_count += 1
-                        status_msg = "Invalid URL"
-                        st.error(f"→ {company} – {role}: {status_msg}")
-                        results.append({
-                            'Date': current_date, 'Company Name': company, 'URL': url, 'Role': role,
-                            'Status': status_msg, 'Visa Sponsorship': 'N/A', 'Visa Evidence': '',
-                            'Archive': None
-                        })
-                        continue
-
-                    st.write(f"→ Checking {company} – {role}...")
+                    st.write(f"→ Checking {company} – {role} ({url[:60]}...)")
 
                     filename = f"{company}_{role}".replace(' ', '_').replace('/', '-') + ".html"
                     new_path = LATEST_SNAPSHOT_DIR / filename
@@ -290,7 +278,6 @@ with tab_run:
 
                     html = None
                     try:
-                        # Better headers + retry logic
                         headers = {
                             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -301,33 +288,64 @@ with tab_run:
                         html = r.text
                         with open(new_path, 'w', encoding='utf-8') as f:
                             f.write(html)
-                        success_count += 1
                         st.success(f"  ✓ Page fetched (status {r.status_code})")
-                    except requests.exceptions.RequestException as e:
-                        fail_count += 1
+                    except Exception as e:
+                        error_count += 1
                         status_msg = f"Fetch error: {str(e)}"
                         st.error(f"  ✗ {status_msg}")
                         results.append({
-                            'Date': current_date, 'Company Name': company, 'URL': url, 'Role': role,
-                            'Status': status_msg, 'Visa Sponsorship': 'N/A', 'Visa Evidence': '',
+                            'Date': current_date,
+                            'Company Name': company,
+                            'URL': url,
+                            'Role': role,
+                            'Status': status_msg,
+                            'Visa Sponsorship': 'N/A',
+                            'Visa Evidence': '',
                             'Archive': None
                         })
                         continue
 
-                    # Visa check
-                    visa_status = "No"
-                    evidence_text = ""
-                    if html:
-                        keywords = ["visa sponsorship", "sponsors visa", "visa support", "work visa", "sponsor h1b", "visa sponsorship available"]
-                        evidence = []
-                        for line in re.split(r'[\.\n]+', html):
-                            line = line.strip()
-                            if any(kw.lower() in line.lower() for kw in keywords):
-                                evidence.append(line)
-                        if evidence:
-                            visa_status = "Yes"
-                            evidence_text = "\n".join(evidence)[:400] + "..." if len("\n".join(evidence)) > 400 else "\n".join(evidence)
+                    # ── Improved Visa Sponsorship Detection ───────────────────────────────
+                    positive_keywords = [
+                        "visa sponsorship", "sponsors visa", "visa support",
+                        "work visa sponsorship", "relocation and visa", "h-1b sponsorship",
+                        "sponsorship available", "open to sponsorship", "visa eligible",
+                        "relocation assistance visa", "sponsors visas", "visa assistance"
+                    ]
 
+                    negative_keywords = [
+                        "no visa sponsorship", "does not sponsor", "no sponsorship",
+                        "must have right to work", "authorization to work without sponsorship",
+                        "no visa support", "cannot sponsor", "does not offer sponsorship",
+                        "ineligible for sponsorship", "right to work required"
+                    ]
+
+                    lower_html = html.lower()
+
+                    # Find evidence snippets (sentences containing keywords)
+                    sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s', html)
+                    evidence = []
+                    for s in sentences:
+                        s_lower = s.lower()
+                        if any(kw in s_lower for kw in positive_keywords + negative_keywords):
+                            evidence.append(s.strip())
+
+                    # Determine status
+                    has_positive = any(kw in lower_html for kw in positive_keywords)
+                    has_negative = any(kw in lower_html for kw in negative_keywords)
+
+                    if has_positive and not has_negative:
+                        visa_status = "Yes"
+                    elif has_negative and not has_positive:
+                        visa_status = "No"
+                    elif has_positive and has_negative:
+                        visa_status = "Conflicting"
+                    else:
+                        visa_status = "Unknown"
+
+                    evidence_text = "\n".join(evidence[:3]) if evidence else ""  # show first 3 relevant sentences
+
+                    # Change detection
                     changed = True
                     status = "First snapshot"
 
@@ -336,8 +354,8 @@ with tab_run:
                             with open(old_path, 'r', encoding='utf-8') as old, open(new_path, 'r', encoding='utf-8') as new:
                                 changed = old.read() != new.read()
                             status = "Change detected! 🚨" if changed else "No change"
-                        except Exception as e:
-                            status = f"Comparison failed: {str(e)}"
+                        except:
+                            status = "Change detection failed"
 
                     archive_link = None
                     if changed and take_archives:
@@ -346,12 +364,17 @@ with tab_run:
                         archive_link = str(archive_path)
 
                     results.append({
-                        'Date': current_date, 'Company Name': company, 'URL': url, 'Role': role,
-                        'Status': status, 'Visa Sponsorship': visa_status, 'Visa Evidence': evidence_text,
+                        'Date': current_date,
+                        'Company Name': company,
+                        'URL': url,
+                        'Role': role,
+                        'Status': status,
+                        'Visa Sponsorship': visa_status,
+                        'Visa Evidence': evidence_text,
                         'Archive': archive_link
                     })
 
-                st.markdown(f"**Scan Summary:** {success_count} successful | {fail_count} failed")
+                st.markdown(f"**Scan Summary:** {len(results) - error_count} successful | {error_count} failed")
 
                 if results:
                     df_results = pd.DataFrame(results)
@@ -371,8 +394,7 @@ with tab_run:
                     st.subheader("Latest Run Results")
                     st.dataframe(df_results, use_container_width=True)
                 else:
-                    st.error("No results at all – check your URLs (many sites block automated access). Try company career pages instead of job view links.")
-
+                    st.error("No results generated – check URLs and network.")
 # ── History & Archives Tab ─────────────────────────────────────────────────────
 with tab_history:
     st.header("📜 History & Archives")
