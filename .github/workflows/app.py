@@ -307,47 +307,15 @@ with tab_run:
                         })
                         continue
 
-                    # ── Improved Visa Sponsorship Detection ───────────────────────────────
-                    positive_keywords = [
-                        "visa sponsorship", "sponsors visa", "visa support",
-                        "work visa sponsorship", "relocation and visa", "h-1b sponsorship",
-                        "sponsorship available", "open to sponsorship", "visa eligible",
-                        "relocation assistance visa", "sponsors visas", "visa assistance"
-                    ]
+                    # Visa check
+                    visa_status = "No"
+                    evidence_text = ""
+                    if html:
+                        visa_keywords = ["visa sponsorship", "sponsors visa", "visa support", "work visa", "sponsor h1b"]
+                        evidence = [s.strip() for s in re.split(r'\.\s*', html) if any(kw.lower() in s.lower() for kw in visa_keywords)]
+                        visa_status = "Yes" if evidence else "No"
+                        evidence_text = "\n".join(evidence)[:500] + "..." if len("\n".join(evidence)) > 500 else "\n".join(evidence)
 
-                    negative_keywords = [
-                        "no visa sponsorship", "does not sponsor", "no sponsorship",
-                        "must have right to work", "authorization to work without sponsorship",
-                        "no visa support", "cannot sponsor", "does not offer sponsorship",
-                        "ineligible for sponsorship", "right to work required"
-                    ]
-
-                    lower_html = html.lower()
-
-                    # Find evidence snippets (sentences containing keywords)
-                    sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s', html)
-                    evidence = []
-                    for s in sentences:
-                        s_lower = s.lower()
-                        if any(kw in s_lower for kw in positive_keywords + negative_keywords):
-                            evidence.append(s.strip())
-
-                    # Determine status
-                    has_positive = any(kw in lower_html for kw in positive_keywords)
-                    has_negative = any(kw in lower_html for kw in negative_keywords)
-
-                    if has_positive and not has_negative:
-                        visa_status = "Yes"
-                    elif has_negative and not has_positive:
-                        visa_status = "No"
-                    elif has_positive and has_negative:
-                        visa_status = "Conflicting"
-                    else:
-                        visa_status = "Unknown"
-
-                    evidence_text = "\n".join(evidence[:3]) if evidence else ""  # show first 3 relevant sentences
-
-                    # Change detection
                     changed = True
                     status = "First snapshot"
 
@@ -393,10 +361,30 @@ with tab_run:
                     st.session_state['latest_results'] = df_results
 
                     st.success("Monitoring complete!")
-                    st.subheader("Latest Run Results")
+
+                    # ── NEW: Show only New / Changed rows first ──────────────────────
+                    st.subheader("New / Changed Information (Highlights only)")
+                    changed_df = df_results[df_results['Status'].str.contains("Change|First", na=False)]
+                    if not changed_df.empty:
+                        st.dataframe(changed_df, use_container_width=True)
+                    else:
+                        st.info("No new or changed pages detected in this run.")
+
+                    # Full results below
+                    st.subheader("Full Scan Results")
                     st.dataframe(df_results, use_container_width=True)
                 else:
                     st.error("No results generated – check URLs and network.")
+
+    # Show latest results (persistent)
+    if 'latest_results' in st.session_state:
+        st.subheader("Latest Run Results")
+        st.dataframe(st.session_state['latest_results'], use_container_width=True)
+    elif OUTPUT_FILE.exists():
+        st.subheader("Previous Results")
+        st.dataframe(pd.read_excel(OUTPUT_FILE).sort_values('Date', ascending=False), use_container_width=True)
+    else:
+        st.info("Run monitoring to see results.")
 # ── History & Archives Tab ─────────────────────────────────────────────────────
 with tab_history:
     st.header("📜 History & Archives")
