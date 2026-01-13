@@ -104,33 +104,29 @@ with tab_overview:
     if OUTPUT_FILE.exists():
         history = pd.read_excel(OUTPUT_FILE)
 
-        # Get latest record per unique target
+        # Get the most recent record for each unique target
         latest = history.sort_values('Date', ascending=False)\
                         .drop_duplicates(subset=['Company Name', 'URL', 'Role'], keep='first')
 
-        # Merge — keep original URL from targets (avoid truncated ones from history)
+        # Merge keeping original URL from targets as priority
         overview_df = df_targets[['Company Name', 'URL', 'Role']].copy()
+
+        # Merge only needed columns without suffix confusion
         overview_df = overview_df.merge(
             latest[['Company Name', 'URL', 'Role', 'Visa Sponsorship', 'Date']],
             on=['Company Name', 'URL', 'Role'],
-            how='left',
-            suffixes=('', '_hist')
+            how='left'
         )
 
-        # Use original URL if available, fallback to history URL only if missing
-        overview_df['URL'] = overview_df['URL'].combine_first(overview_df['URL_hist'])
-        overview_df = overview_df.drop(columns=['URL_hist'], errors='ignore')
+        # Clean up: fill missing values
+        overview_df['Visa Sponsorship'] = overview_df['Visa Sponsorship'].fillna('Not checked yet')
+        overview_df['Date'] = overview_df['Date'].fillna('—')
 
-        # Final clean-up
-        overview_df = overview_df.fillna({
-            'Visa Sponsorship': 'Not checked yet',
-            'Date': '—'
-        })
-
+        # Final columns order
         overview_df = overview_df[['Company Name', 'Role', 'URL', 'Visa Sponsorship', 'Date']]
         overview_df = overview_df.rename(columns={'Date': 'Last Checked'})
 
-        # Better styling with high-contrast colors
+        # High-contrast, readable styling
         def highlight_visa(val):
             if val == 'Yes':
                 return 'background-color: #28a745; color: white; font-weight: bold;'
@@ -142,25 +138,32 @@ with tab_overview:
 
         st.dataframe(
             overview_df.style.map(highlight_visa, subset=['Visa Sponsorship'])
-                             .set_properties(**{'text-align': 'left'})
+                             .set_properties(**{
+                                 'text-align': 'left',
+                                 'white-space': 'normal',
+                                 'word-break': 'break-word'
+                             })
                              .set_table_styles([
                                  {'selector': 'th', 'props': [('font-weight', 'bold'), ('text-align', 'center')]},
-                                 {'selector': 'td', 'props': [('white-space', 'normal'), ('word-break', 'break-word')]}
+                                 {'selector': 'td', 'props': [('padding', '8px')]}
                              ]),
             use_container_width=True,
             column_config={
-                "URL": st.column_config.LinkColumn("URL", display_text=lambda x: x[:60] + "..." if len(x) > 60 else x),
-                "Visa Sponsorship": st.column_config.Column("Visa Sponsorship", width="medium"),
-                "Last Checked": st.column_config.Column("Last Checked", width="medium")
+                "URL": st.column_config.LinkColumn(
+                    "URL",
+                    display_text=lambda x: x[:70] + "..." if len(x) > 70 else x
+                ),
+                "Visa Sponsorship": st.column_config.Column(width="medium"),
+                "Last Checked": st.column_config.Column(width="medium")
             }
         )
 
-        if 'Yes' in overview_df['Visa Sponsorship'].values:
+        if overview_df['Visa Sponsorship'].eq('Yes').any():
             st.success("Some positions currently appear to offer Visa Sponsorship!")
         else:
             st.info("No confirmed Visa Sponsorship found in the latest checks.")
     else:
-        st.info("No monitoring data yet. Run a check in the 'Run Monitoring' tab to populate this overview.")
+        st.info("No monitoring data yet. Run a check in the 'Run Monitoring' tab.")
 
 # ── Manage Targets Tab ─────────────────────────────────────────────────────────
 with tab_targets:
