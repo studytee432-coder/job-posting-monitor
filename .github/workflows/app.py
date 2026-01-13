@@ -7,7 +7,7 @@ import pandas as pd
 from pathlib import Path
 import hmac
 from screenshotone import Client, TakeOptions
-from pyzotero import zotero  # New import for Zotero integration
+from pyzotero import zotero
 
 # Page config
 st.set_page_config(page_title="Job Posting Monitor", page_icon="🔍", layout="wide")
@@ -47,7 +47,7 @@ if not check_password():
 # Main App
 st.title("🔍 Automated Job Posting Monitor")
 st.markdown("""
-Welcome, Ritika! Track job pages in Dublin and beyond. Now with Visa Sponsorship checks and optional Zotero integration for long-term data retention.
+Welcome! Track job pages with full Zotero integration for targets and archives.
 """)
 
 # Directories
@@ -61,11 +61,15 @@ OUTPUT_FILE = BASE_DIR / 'results.xlsx'
 for dir_path in [LATEST_SNAPSHOT_DIR, OLD_SNAPSHOT_DIR, SCREENSHOTS_DIR]:
     dir_path.mkdir(exist_ok=True)
 
-# Load targets
+# Load targets (now with Zotero Key column)
+columns = ['Company Name', 'URL', 'Role', 'Zotero Key']
 if INPUT_FILE.exists():
     df_targets = pd.read_excel(INPUT_FILE)
+    for col in columns:
+        if col not in df_targets.columns:
+            df_targets[col] = None
 else:
-    df_targets = pd.DataFrame(columns=['Company Name', 'URL', 'Role'])
+    df_targets = pd.DataFrame(columns=columns)
 
 # Tabs
 tab_overview, tab_targets, tab_run, tab_history = st.tabs([
@@ -97,18 +101,18 @@ with tab_overview:
     st.markdown("### Quick Tips")
     with st.expander("How to get started"):
         st.write("""
-        - Add career pages in **Manage Targets** (e.g., for Dublin jobs).
-        - Run checks in **Run Monitoring** – now detects Visa Sponsorship!
-        - View archives in **History** with screenshots or Zotero links.
-        - For long-term retention, enable Zotero (setup in secrets).
+        - Sync targets bidirectionally with Zotero in **Manage Targets**.
+        - Run checks in **Run Monitoring** – detects Visa Sponsorship!
+        - View archives in **History** with Zotero links or screenshots.
         """)
 
 with tab_targets:
     st.header("🎯 Manage Monitoring Targets")
-    st.markdown("Add/edit/delete targets. Optionally sync from Zotero collection for centralized management.")
+    st.markdown("Add/edit/delete targets with full bidirectional Zotero sync.")
 
-    # Zotero Sync Option
-    use_zotero = st.checkbox("Use Zotero for Targets & Archives (enable in secrets)")
+    use_zotero = st.checkbox("Enable Zotero Integration (setup in secrets)", value=True)
+    zot = None
+    selected_collection_id = None
     if use_zotero:
         try:
             zot = zotero.Zotero(
@@ -116,25 +120,47 @@ with tab_targets:
                 st.secrets["zotero"]["library_type"],
                 st.secrets["zotero"]["api_key"]
             )
-            if st.button("🔄 Sync Targets from Zotero"):
-                items = zot.collection_items(st.secrets["zotero"]["collection_id"])
-                new_targets = []
+            collections = zot.collections()
+            collection_names = ["All Collections"] + [c['data']['name'] for c in collections]
+            selected_collection = st.selectbox("Select Zotero Collection", collection_names)
+            if selected_collection != "All Collections":
+                selected_collection_id = next((c['key'] for c in collections if c['data']['name'] == selected_collection), None)
+        except Exception as e:
+            st.warning(f"Zotero connection failed: {e}. Check secrets.")
+
+    if use_zotero and zot:
+        if st.button("🔄 Sync from Zotero"):
+            try:
+                if selected_collection_id:
+                    items = zot.everything(zot.collection_items(selected_collection_id))
+                else:
+                    items = zot.everything(zot.items(itemType='webpage'))
+                synced_targets = []
                 for item in items:
                     if item['meta']['itemType'] == 'webpage':
                         company = item['data'].get('title', 'Unknown')
                         url = item['data'].get('url', '')
                         role = item['data'].get('extra', '')  # Use extra for role
+                        key = item['key']
                         if url:
-                            new_targets.append({'Company Name': company, 'URL': url, 'Role': role})
-                if new_targets:
-                    df_targets = pd.DataFrame(new_targets)
+                            synced_targets.append({'Company Name': company, 'URL': url, 'Role': role, 'Zotero Key': key})
+                if synced_targets:
+                    df_synced = pd.DataFrame(synced_targets)
+                    # Merge with existing, update if key matches
+                    if not df_targets.empty:
+                        df_targets = df_targets.merge(df_synced, on='Zotero Key', how='outer', suffixes=('', '_new'))
+                        for col in ['Company Name', 'URL', 'Role']:
+                            df_targets[col] = df_targets[col + '_new'].combine_first(df_targets[col])
+                            df_targets.drop(col + '_new', axis=1, inplace=True)
+                    else:
+                        df_targets = df_synced
                     df_targets.to_excel(INPUT_FILE, index=False)
-                    st.success(f"Synced {len(new_targets)} targets from Zotero!")
+                    st.success(f"Synced {len(synced_targets)} targets from Zotero!")
                     st.rerun()
                 else:
-                    st.info("No webpage items found in Zotero collection.")
-        except Exception as e:
-            st.warning(f"Zotero sync failed: {e}. Check secrets for api_key, library_id, library_type, collection_id.")
+                    st.info("No webpage items found.")
+            except Exception as e:
+                st.error(f"Sync failed: {e}")
 
     edited_targets = st.data_editor(
         df_targets,
@@ -142,31 +168,57 @@ with tab_targets:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Company Name": st.column_config.TextColumn("Company Name", required=True),
-            "URL": st.column_config.LinkColumn("Career/Job URL", required=True),
-            "Role": st.column_config.TextColumn("Role/Keyword", required=True),
+            "Company Name": st.column_config.TextColumn(required=True),
+            "URL": st.column_config.LinkColumn(required=True),
+            "Role": st.column_config.TextColumn(required=True),
+            "Zotero Key": st.column_config.TextColumn(disabled=True),  # Read-only
         }
     )
 
     col_save, col_info = st.columns([1, 3])
     with col_save:
-        if st.button("💾 Save Targets", type="primary", use_container_width=True):
+        if st.button("💾 Save Targets & Sync to Zotero", type="primary", use_container_width=True):
             if edited_targets.duplicated(subset=['Company Name', 'Role']).any():
                 st.error("Duplicates found.")
-            elif edited_targets.isnull().values.any():
-                st.error("Fill all fields.")
+            elif edited_targets.isnull().any().any() and 'Zotero Key' not in edited_targets.columns[edited_targets.isnull().any()]:
+                st.error("Fill required fields.")
             else:
+                if use_zotero and zot and selected_collection_id:
+                    try:
+                        for idx, row in edited_targets.iterrows():
+                            item_key = row.get('Zotero Key')
+                            template = zot.item_template('webpage')
+                            template['title'] = row['Company Name']
+                            template['url'] = row['URL']
+                            template['extra'] = row['Role']
+                            if selected_collection_id:
+                                template['collections'] = [selected_collection_id]
+                            if item_key:
+                                # Update
+                                item = zot.item(item_key)
+                                item['data']['title'] = template['title']
+                                item['data']['url'] = template['url']
+                                item['data']['extra'] = template['extra']
+                                zot.update_item(item)
+                            else:
+                                # Create
+                                new_item = zot.create_items([template])
+                                new_key = new_item['successful']['0']['key']
+                                edited_targets.at[idx, 'Zotero Key'] = new_key
+                        st.success("Synced to Zotero!")
+                    except Exception as e:
+                        st.warning(f"Zotero sync failed: {e}")
                 edited_targets.to_excel(INPUT_FILE, index=False)
-                st.success("Saved!")
+                st.success("Targets saved!")
                 st.rerun()
     with col_info:
-        st.info("Use company career URLs to avoid blocks. For Visa checks, pages must mention 'visa sponsorship' explicitly.")
+        st.info("Zotero sync: Pulls all webpage items; pushes updates/adds to selected collection.")
 
 with tab_run:
     st.header("🚀 Run Monitoring Check")
-    st.markdown("Scan targets for changes. Adds 'Visa Sponsorship' column based on page content.")
+    st.markdown("Scan for changes, Visa mentions, and archive to Zotero if enabled.")
 
-    take_archives = st.checkbox("📸 Take Screenshot / Archive to Zotero on Changes", value=True)
+    take_archives = st.checkbox("📸 Archive Changes (Zotero or Screenshot)", value=True)
 
     if st.button("🔄 Run Now", type="primary", use_container_width=True):
         if len(edited_targets) == 0:
@@ -176,21 +228,13 @@ with tab_run:
                 current_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 results = []
                 screenshot_client = None
-                zot = None
                 if take_archives:
                     try:
                         screenshot_client = Client(st.secrets["screenshotone"]["access_key"], st.secrets["screenshotone"]["secret_key"])
                     except:
                         pass
-                    if use_zotero:
-                        try:
-                            zot = zotero.Zotero(
-                                st.secrets["zotero"]["library_id"],
-                                st.secrets["zotero"]["library_type"],
-                                st.secrets["zotero"]["api_key"]
-                            )
-                        except:
-                            st.warning("Zotero setup incomplete.")
+                    if use_zotero and zot:
+                        pass  # zot already initialized
 
                 for _, row in edited_targets.iterrows():
                     company = row['Company Name']
@@ -200,9 +244,6 @@ with tab_run:
                     filename = f"{company.replace(' ', '_').replace('/', '-')}_{role.replace(' ', '_').replace('/', '-')}.html"
                     new_path = LATEST_SNAPSHOT_DIR / filename
                     old_path = OLD_SNAPSHOT_DIR / filename
-                    archive_dir = BASE_DIR / 'Archives' / current_date.replace(':', '-')
-                    archive_dir.mkdir(parents=True, exist_ok=True)
-                    archive_path = archive_dir / filename
 
                     try:
                         response = requests.get(url, timeout=20, headers={'User-Agent': 'Mozilla/5.0'})
@@ -210,8 +251,6 @@ with tab_run:
                         html_content = response.text
                         with open(new_path, 'w', encoding='utf-8') as f:
                             f.write(html_content)
-                        # Archive copy for long-term retention
-                        shutil.copy(new_path, archive_path)
                     except Exception as e:
                         results.append({
                             'Company Name': company, 'URL': url, 'Role': role, 'Date': current_date,
@@ -219,7 +258,6 @@ with tab_run:
                         })
                         continue
 
-                    # Visa Sponsorship Check
                     visa_keywords = ["visa sponsorship", "sponsors visa", "visa support", "work visa", "sponsor h1b", "sponsor visa"]
                     visa_mention = any(keyword.lower() in html_content.lower() for keyword in visa_keywords)
                     visa_status = "Yes" if visa_mention else "No"
@@ -234,20 +272,25 @@ with tab_run:
 
                     archive_link = None
                     if has_changed and take_archives:
-                        if zot:
+                        archive_filename = f"{current_date.replace(':', '-')}_{company}_{role}.html"
+                        archive_path = BASE_DIR / 'Archives' / archive_filename
+                        archive_path.parent.mkdir(exist_ok=True)
+                        shutil.copy(new_path, archive_path)
+                        if use_zotero and zot:
                             try:
                                 item = zot.item_template('webpage')
-                                item['title'] = f"{company} - {role} ({current_date})"
+                                item['title'] = f"Archive: {company} - {role} ({current_date})"
                                 item['url'] = url
-                                item['extra'] = role
+                                item['extra'] = f"Role: {role}; Visa: {visa_status}"
+                                if selected_collection_id:
+                                    item['collections'] = [selected_collection_id]
                                 new_item = zot.create_items([item])
                                 item_key = new_item['successful']['0']['key']
-                                # Attach HTML snapshot
                                 zot.attachment_simple([str(archive_path)], item_key)
                                 archive_link = f"https://www.zotero.org/{st.secrets['zotero']['library_type']}s/{st.secrets['zotero']['library_id']}/items/{item_key}"
                                 status += " (Archived to Zotero)"
                             except Exception as e:
-                                st.warning(f"Zotero archive failed for {company}: {e}")
+                                st.warning(f"Zotero archive failed: {e}")
                         elif screenshot_client:
                             try:
                                 options = TakeOptions.url(url).full_page(True).block_cookie_banners(True)
@@ -294,7 +337,7 @@ with tab_history:
             num_rows="dynamic",
             use_container_width=True,
             column_config={
-                "Archive": st.column_config.ImageColumn("Archive Preview", width="medium") if not use_zotero else st.column_config.LinkColumn("Zotero Link"),
+                "Archive": st.column_config.LinkColumn("Zotero/Archive Link") if use_zotero else st.column_config.ImageColumn("Screenshot Preview", width="medium"),
             }
         )
 
@@ -325,7 +368,7 @@ with tab_history:
             for _, row in change_rows.iterrows():
                 if pd.notna(row['Archive']):
                     if use_zotero:
-                        st.link_button("View in Zotero", row['Archive'])
+                        st.link_button("View Archive in Zotero", row['Archive'])
                     else:
                         st.image(row['Archive'], caption=f"{row['Company Name']} - {row['Date']}", use_column_width=True)
         else:
@@ -333,7 +376,6 @@ with tab_history:
 
         csv = filtered.to_csv(index=False).encode()
         st.download_button("📥 Download CSV", csv, "history.csv")
-
     else:
         st.info("No history. Run monitoring.")
 
@@ -344,4 +386,4 @@ if st.sidebar.button("🚪 Logout"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-st.sidebar.info("Cloud-based app with persistent data. Zotero integrates for long-term archives!")
+st.sidebar.info("Full Zotero bidirectional sync for targets and archives!")
