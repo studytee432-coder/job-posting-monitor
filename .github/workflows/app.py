@@ -250,27 +250,39 @@ with tab_targets:
 # ── Run Monitoring Tab ─────────────────────────────────────────────────────────
 with tab_run:
     st.header("🚀 Run Monitoring Check")
-    st.markdown("Scans all targets. You should see progress for each target below.")
+    st.markdown("This will scan every target. Progress & errors will appear below.")
 
     take_archives = st.checkbox("Archive changes (Zotero or Screenshot)", value=True)
 
     if st.button("🔄 Run Now", type="primary", use_container_width=True):
         if df_targets.empty:
-            st.warning("No targets added. Go to Manage Targets first.")
+            st.warning("No targets. Add some in Manage Targets first.")
         else:
-            with st.spinner("Checking targets..."):
+            with st.spinner("Running full scan..."):
                 current_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 results = []
-                error_count = 0
+                success_count = 0
+                fail_count = 0
 
-                st.write("Starting scan...")
+                st.markdown("**Scan Progress:**")
 
                 for idx, row in df_targets.iterrows():
                     company = row['Company Name']
-                    url = row['URL']
+                    url = row['URL'].strip()  # clean any whitespace
                     role = row['Role']
 
-                    st.write(f"→ Checking {company} – {role} ({url[:60]}...)")
+                    if not url or not url.startswith(('http://', 'https://')):
+                        fail_count += 1
+                        status_msg = "Invalid URL"
+                        st.error(f"→ {company} – {role}: {status_msg}")
+                        results.append({
+                            'Date': current_date, 'Company Name': company, 'URL': url, 'Role': role,
+                            'Status': status_msg, 'Visa Sponsorship': 'N/A', 'Visa Evidence': '',
+                            'Archive': None
+                        })
+                        continue
+
+                    st.write(f"→ Checking {company} – {role}...")
 
                     filename = f"{company}_{role}".replace(' ', '_').replace('/', '-') + ".html"
                     new_path = LATEST_SNAPSHOT_DIR / filename
@@ -278,36 +290,43 @@ with tab_run:
 
                     html = None
                     try:
-                        r = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+                        # Better headers + retry logic
+                        headers = {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                            'Accept-Language': 'en-US,en;q=0.5',
+                        }
+                        r = requests.get(url, timeout=20, headers=headers, allow_redirects=True)
                         r.raise_for_status()
                         html = r.text
                         with open(new_path, 'w', encoding='utf-8') as f:
                             f.write(html)
-                        st.write(f"  ✓ Page fetched successfully")
-                    except Exception as e:
-                        error_count += 1
-                        status_msg = f"Error: {str(e)}"
+                        success_count += 1
+                        st.success(f"  ✓ Page fetched (status {r.status_code})")
+                    except requests.exceptions.RequestException as e:
+                        fail_count += 1
+                        status_msg = f"Fetch error: {str(e)}"
                         st.error(f"  ✗ {status_msg}")
                         results.append({
-                            'Date': current_date,
-                            'Company Name': company,
-                            'URL': url,
-                            'Role': role,
-                            'Status': status_msg,
-                            'Visa Sponsorship': 'N/A',
-                            'Visa Evidence': '',
+                            'Date': current_date, 'Company Name': company, 'URL': url, 'Role': role,
+                            'Status': status_msg, 'Visa Sponsorship': 'N/A', 'Visa Evidence': '',
                             'Archive': None
                         })
                         continue
 
-                    # Visa check (only if page was fetched)
+                    # Visa check
                     visa_status = "No"
                     evidence_text = ""
                     if html:
-                        visa_keywords = ["visa sponsorship", "sponsors visa", "visa support", "work visa", "sponsor h1b"]
-                        evidence = [s.strip() for s in re.split(r'\.\s*', html) if any(kw.lower() in s.lower() for kw in visa_keywords)]
-                        visa_status = "Yes" if evidence else "No"
-                        evidence_text = "\n".join(evidence)[:500] + "..." if len("\n".join(evidence)) > 500 else "\n".join(evidence)
+                        keywords = ["visa sponsorship", "sponsors visa", "visa support", "work visa", "sponsor h1b", "visa sponsorship available"]
+                        evidence = []
+                        for line in re.split(r'[\.\n]+', html):
+                            line = line.strip()
+                            if any(kw.lower() in line.lower() for kw in keywords):
+                                evidence.append(line)
+                        if evidence:
+                            visa_status = "Yes"
+                            evidence_text = "\n".join(evidence)[:400] + "..." if len("\n".join(evidence)) > 400 else "\n".join(evidence)
 
                     changed = True
                     status = "First snapshot"
@@ -317,8 +336,8 @@ with tab_run:
                             with open(old_path, 'r', encoding='utf-8') as old, open(new_path, 'r', encoding='utf-8') as new:
                                 changed = old.read() != new.read()
                             status = "Change detected! 🚨" if changed else "No change"
-                        except:
-                            status = "Change detection failed"
+                        except Exception as e:
+                            status = f"Comparison failed: {str(e)}"
 
                     archive_link = None
                     if changed and take_archives:
@@ -327,17 +346,12 @@ with tab_run:
                         archive_link = str(archive_path)
 
                     results.append({
-                        'Date': current_date,
-                        'Company Name': company,
-                        'URL': url,
-                        'Role': role,
-                        'Status': status,
-                        'Visa Sponsorship': visa_status,
-                        'Visa Evidence': evidence_text,
+                        'Date': current_date, 'Company Name': company, 'URL': url, 'Role': role,
+                        'Status': status, 'Visa Sponsorship': visa_status, 'Visa Evidence': evidence_text,
                         'Archive': archive_link
                     })
 
-                st.write(f"Scan finished. Successful: {len(results) - error_count} | Errors: {error_count}")
+                st.markdown(f"**Scan Summary:** {success_count} successful | {fail_count} failed")
 
                 if results:
                     df_results = pd.DataFrame(results)
@@ -346,7 +360,6 @@ with tab_run:
                         df_results = pd.concat([existing, df_results], ignore_index=True)
                     df_results.to_excel(OUTPUT_FILE, index=False)
 
-                    # Update snapshot folders
                     shutil.rmtree(OLD_SNAPSHOT_DIR, ignore_errors=True)
                     shutil.copytree(LATEST_SNAPSHOT_DIR, OLD_SNAPSHOT_DIR, dirs_exist_ok=True)
                     shutil.rmtree(LATEST_SNAPSHOT_DIR, ignore_errors=True)
@@ -358,17 +371,7 @@ with tab_run:
                     st.subheader("Latest Run Results")
                     st.dataframe(df_results, use_container_width=True)
                 else:
-                    st.error("No results generated at all – check URLs and network.")
-
-    # Show latest results
-    if 'latest_results' in st.session_state:
-        st.subheader("Latest Run Results")
-        st.dataframe(st.session_state['latest_results'], use_container_width=True)
-    elif OUTPUT_FILE.exists():
-        st.subheader("Previous Results")
-        st.dataframe(pd.read_excel(OUTPUT_FILE).sort_values('Date', ascending=False), use_container_width=True)
-    else:
-        st.info("Run monitoring to see results.")
+                    st.error("No results at all – check your URLs (many sites block automated access). Try company career pages instead of job view links.")
 
 # ── History & Archives Tab ─────────────────────────────────────────────────────
 with tab_history:
