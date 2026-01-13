@@ -13,7 +13,7 @@ import re
 # Page config
 st.set_page_config(page_title="Job Posting Monitor", page_icon="🔍", layout="wide")
 
-# Authentication (unchanged)
+# ── Authentication (unchanged) ─────────────────────────────────────────────────
 def check_password():
     def password_entered():
         if (
@@ -47,11 +47,9 @@ if not check_password():
 
 # Main App
 st.title("🔍 Automated Job Posting Monitor")
-st.markdown("""
-Welcome, Ritika! Track job pages in Dublin with full Zotero integration for targets and archives.
-""")
+st.markdown("Welcome, Ritika! Track job pages in Dublin with full Zotero integration.")
 
-# Directories (unchanged)
+# Directories
 BASE_DIR = Path(__file__).parent
 LATEST_SNAPSHOT_DIR = BASE_DIR / 'Latest_Snapshot'
 OLD_SNAPSHOT_DIR = BASE_DIR / 'Old_Snapshot'
@@ -60,55 +58,48 @@ ARCHIVES_DIR = BASE_DIR / 'Archives'
 INPUT_FILE = BASE_DIR / 'targets.xlsx'
 OUTPUT_FILE = BASE_DIR / 'results.xlsx'
 
-for dir_path in [LATEST_SNAPSHOT_DIR, OLD_SNAPSHOT_DIR, SCREENSHOTS_DIR, ARCHIVES_DIR]:
-    dir_path.mkdir(exist_ok=True)
+for d in [LATEST_SNAPSHOT_DIR, OLD_SNAPSHOT_DIR, SCREENSHOTS_DIR, ARCHIVES_DIR]:
+    d.mkdir(exist_ok=True)
 
-# Load targets
+# Load targets safely
 columns = ['Company Name', 'URL', 'Role', 'Zotero Key']
 if INPUT_FILE.exists():
     df_targets = pd.read_excel(INPUT_FILE)
 else:
     df_targets = pd.DataFrame(columns=columns)
 
-# Fix nulls and types for data_editor stability
 df_targets = df_targets.astype(str).fillna("")
 
 # Tabs
 tab_overview, tab_targets, tab_run, tab_history = st.tabs([
-    "📊 Overview", 
-    "🎯 Manage Targets", 
-    "🚀 Run Monitoring", 
-    "📜 History & Archives"
+    "📊 Overview", "🎯 Manage Targets", "🚀 Run Monitoring", "📜 History & Archives"
 ])
 
+# Overview (unchanged)
 with tab_overview:
     st.header("📊 Dashboard Overview")
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Targets Monitored", len(df_targets))
     with col2:
+        changes = 0
         if OUTPUT_FILE.exists():
-            history_df = pd.read_excel(OUTPUT_FILE)
-            changes = len(history_df[history_df['Status'].str.contains("Change|First", na=False)])
-            st.metric("Changes Detected", changes)
-        else:
-            st.metric("Changes Detected", 0)
+            history = pd.read_excel(OUTPUT_FILE)
+            changes = len(history[history['Status'].str.contains("Change|First", na=False)])
+        st.metric("Changes Detected", changes)
     with col3:
+        last = "Never"
         if OUTPUT_FILE.exists():
-            last_run = pd.read_excel(OUTPUT_FILE)['Date'].max()
-            st.metric("Last Run", last_run if pd.notna(last_run) else "Never")
-        else:
-            st.metric("Last Run", "Never")
+            last = pd.read_excel(OUTPUT_FILE)['Date'].max() or "Never"
+        st.metric("Last Run", last)
 
+# Targets tab (with session state for persistence)
 with tab_targets:
     st.header("🎯 Manage Monitoring Targets")
 
-    # Initialize session state for targets if not exists
+    # Session state for targets
     if 'df_targets' not in st.session_state:
-        if INPUT_FILE.exists():
-            st.session_state['df_targets'] = pd.read_excel(INPUT_FILE).astype(str).fillna("")
-        else:
-            st.session_state['df_targets'] = pd.DataFrame(columns=['Company Name', 'URL', 'Role', 'Zotero Key'])
+        st.session_state['df_targets'] = df_targets
 
     df_targets = st.session_state['df_targets']
 
@@ -124,12 +115,12 @@ with tab_targets:
                 st.secrets["zotero"]["api_key"]
             )
             collections = zot.collections()
-            collection_names = ["All Items"] + [c['data']['name'] for c in collections]
-            selected_collection = st.selectbox("Select Zotero Collection", collection_names)
-            if selected_collection != "All Items":
-                selected_collection_id = next((c['key'] for c in collections if c['data']['name'] == selected_collection), None)
+            names = ["All Items"] + [c['data']['name'] for c in collections]
+            selected = st.selectbox("Select Zotero Collection", names)
+            if selected != "All Items":
+                selected_collection_id = next((c['key'] for c in collections if c['data']['name'] == selected), None)
         except Exception as e:
-            st.warning(f"Zotero connection failed: {str(e)}")
+            st.warning(f"Zotero failed: {str(e)}")
 
     if use_zotero and zot and st.button("🔄 Sync from Zotero"):
         try:
@@ -138,50 +129,36 @@ with tab_targets:
             else:
                 items = zot.everything(zot.items(itemtype="webpage"))
 
-            synced_targets = []
+            synced = []
             for item in items:
-                company = item['data'].get('title', 'Unknown')
-                url = item['data'].get('url', '')
-                role = item['data'].get('extra', '')
-                key = item['key']
-                if url:
-                    synced_targets.append({
-                        'Company Name': company,
-                        'URL': url,
-                        'Role': role,
-                        'Zotero Key': key
-                    })
+                d = item['data']
+                synced.append({
+                    'Company Name': d.get('title', 'Unknown'),
+                    'URL': d.get('url', ''),
+                    'Role': d.get('extra', ''),
+                    'Zotero Key': item['key']
+                })
 
-            if synced_targets:
-                df_synced = pd.DataFrame(synced_targets).astype(str).fillna("")
-
-                # Merge with existing (keep Zotero Key as key)
+            if synced:
+                df_new = pd.DataFrame(synced).astype(str).fillna("")
                 if not df_targets.empty:
-                    df_targets = df_targets.merge(
-                        df_synced,
-                        on='Zotero Key',
-                        how='outer',
-                        suffixes=('', '_new')
-                    )
-                    for col in ['Company Name', 'URL', 'Role']:
-                        df_targets[col] = df_targets[f'{col}_new'].combine_first(df_targets[col])
-                        df_targets.drop(f'{col}_new', axis=1, inplace=True, errors='ignore')
+                    df_targets = df_targets.merge(df_new, on='Zotero Key', how='outer', suffixes=('', '_new'))
+                    for c in ['Company Name', 'URL', 'Role']:
+                        df_targets[c] = df_targets[f'{c}_new'].combine_first(df_targets[c])
+                        df_targets.drop(f'{c}_new', axis=1, inplace=True, errors='ignore')
                 else:
-                    df_targets = df_synced
+                    df_targets = df_new
 
-                # Save to file and update session state
                 df_targets.to_excel(INPUT_FILE, index=False)
                 st.session_state['df_targets'] = df_targets
-
-                st.success(f"Synced {len(synced_targets)} items from Zotero!")
-                st.rerun()  # ← This is the key: force rerun so editor shows new data
+                st.success(f"Synced {len(synced)} targets!")
+                st.rerun()
             else:
-                st.info("No webpage items found in the selected scope.")
+                st.info("No webpage items found.")
         except Exception as e:
             st.error(f"Sync failed: {str(e)}")
 
-    # Display editor with current session state data
-    edited_targets = st.data_editor(
+    edited = st.data_editor(
         df_targets,
         num_rows="dynamic",
         use_container_width=True,
@@ -190,51 +167,123 @@ with tab_targets:
             "Company Name": st.column_config.TextColumn("Company Name", required=True),
             "URL": st.column_config.LinkColumn("Career/Job URL", required=True),
             "Role": st.column_config.TextColumn("Role/Keyword", required=True),
-            "Zotero Key": st.column_config.TextColumn("Zotero Key", disabled=False),  # read/write as requested
+            "Zotero Key": st.column_config.TextColumn("Zotero Key", disabled=False),
         }
     )
 
-    col_save, col_info = st.columns([1, 3])
-    with col_save:
-        if st.button("💾 Save Targets & Sync to Zotero", type="primary", use_container_width=True):
-            edited_targets.to_excel(INPUT_FILE, index=False)
-            st.session_state['df_targets'] = edited_targets
-            st.success("Targets saved locally!")
-            st.rerun()
-    with col_info:
-        st.info("Zotero Key is editable. You can manually enter/modify keys if needed.")
+    if st.button("💾 Save Targets", type="primary"):
+        edited.to_excel(INPUT_FILE, index=False)
+        st.session_state['df_targets'] = edited
+        st.success("Saved!")
+        st.rerun()
 
-# Run Monitoring tab (unchanged)
+# ── Run Monitoring ──────────────────────────────────────────────────────────────
 with tab_run:
     st.header("🚀 Run Monitoring Check")
-    st.markdown("Scan targets for changes, visa sponsorship, and archive if enabled.")
 
-    take_archives = st.checkbox("📸 Archive Changes (Zotero or Screenshot)", value=True)
+    take_archives = st.checkbox("Archive changes (Zotero/Screenshot)", value=True)
 
-    if st.button("🔄 Run Now", type="primary", use_container_width=True):
-        if len(df_targets) == 0:
-            st.warning("No targets added yet. Go to Manage Targets first.")
+    if st.button("🔄 Run Now", type="primary"):
+        if df_targets.empty:
+            st.warning("No targets yet. Add some in Manage Targets.")
         else:
-            with st.spinner("Monitoring in progress..."):
+            with st.spinner("Checking all targets..."):
                 current_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 results = []
-                # ... (rest of run monitoring logic remains the same as in your previous version)
+                errors = []
 
-                # Note: If you want to use the editable Zotero Key for archiving, 
-                # you can reference edited_targets or df_targets['Zotero Key'] here
+                for idx, row in df_targets.iterrows():
+                    company = row['Company Name']
+                    url = row['URL']
+                    role = row['Role']
 
-                st.success("Monitoring complete!")
-                st.subheader("Latest Run Results")
-                # st.dataframe(results_df, use_container_width=True)
+                    st.write(f"→ Checking {company} – {role}...")
 
-# History & Archives tab (unchanged placeholder)
+                    filename = f"{company}_{role}".replace(' ', '_').replace('/', '-') + ".html"
+                    new_path = LATEST_SNAPSHOT_DIR / filename
+                    old_path = OLD_SNAPSHOT_DIR / filename
+
+                    try:
+                        r = requests.get(url, timeout=20, headers={'User-Agent': 'Mozilla/5.0'})
+                        r.raise_for_status()
+                        html = r.text
+                        with open(new_path, 'w', encoding='utf-8') as f:
+                            f.write(html)
+                    except Exception as e:
+                        err_msg = f"Fetch failed for {company}: {str(e)}"
+                        errors.append(err_msg)
+                        results.append({
+                            'Date': current_date, 'Company Name': company, 'URL': url, 'Role': role,
+                            'Status': "Error", 'Visa Sponsorship': 'N/A', 'Visa Evidence': '',
+                            'Archive': None
+                        })
+                        st.error(err_msg)
+                        continue
+
+                    # Visa logic (simplified for visibility)
+                    visa_found = "visa sponsorship" in html.lower()
+                    visa_status = "Yes" if visa_found else "No"
+
+                    changed = True
+                    status = "First run"
+
+                    if old_path.exists():
+                        with open(old_path, 'r', encoding='utf-8') as old, open(new_path, 'r', encoding='utf-8') as new:
+                            changed = old.read() != new.read()
+                        status = "Change detected!" if changed else "No change"
+
+                    archive_link = None
+                    if changed and take_archives:
+                        archive_path = ARCHIVES_DIR / f"{current_date}_{filename}"
+                        shutil.copy(new_path, archive_path)
+                        archive_link = str(archive_path)
+
+                    results.append({
+                        'Date': current_date, 'Company Name': company, 'URL': url, 'Role': role,
+                        'Status': status, 'Visa Sponsorship': visa_status, 'Visa Evidence': '',
+                        'Archive': archive_link
+                    })
+
+                if results:
+                    df_results = pd.DataFrame(results)
+                    if OUTPUT_FILE.exists():
+                        existing = pd.read_excel(OUTPUT_FILE)
+                        df_results = pd.concat([existing, df_results], ignore_index=True)
+                    df_results.to_excel(OUTPUT_FILE, index=False)
+
+                    # Update snapshots
+                    shutil.rmtree(OLD_SNAPSHOT_DIR, ignore_errors=True)
+                    shutil.copytree(LATEST_SNAPSHOT_DIR, OLD_SNAPSHOT_DIR)
+                    shutil.rmtree(LATEST_SNAPSHOT_DIR, ignore_errors=True)
+                    LATEST_SNAPSHOT_DIR.mkdir(exist_ok=True)
+
+                    # Save latest results in session state
+                    st.session_state['latest_results'] = df_results
+
+                    st.success("Check complete!")
+                    if errors:
+                        st.warning(f"{len(errors)} targets had errors.")
+                else:
+                    st.warning("No results generated – check if URLs are valid.")
+
+    # Always show latest results if they exist
+    if 'latest_results' in st.session_state:
+        st.subheader("Latest Run Results")
+        st.dataframe(st.session_state['latest_results'], use_container_width=True)
+    elif OUTPUT_FILE.exists():
+        st.subheader("Previous Results")
+        st.dataframe(pd.read_excel(OUTPUT_FILE).sort_values('Date', ascending=False), use_container_width=True)
+    else:
+        st.info("Run monitoring to see results here.")
+
+# History tab (simple)
 with tab_history:
     st.header("📜 History & Archives")
     if OUTPUT_FILE.exists():
         df_history = pd.read_excel(OUTPUT_FILE)
         st.dataframe(df_history.sort_values('Date', ascending=False), use_container_width=True)
     else:
-        st.info("No monitoring history yet. Run a check first.")
+        st.info("No history yet. Run monitoring first.")
 
 # Sidebar
 st.sidebar.markdown("---")
