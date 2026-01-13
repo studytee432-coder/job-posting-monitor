@@ -104,25 +104,21 @@ with tab_overview:
     if OUTPUT_FILE.exists():
         history = pd.read_excel(OUTPUT_FILE)
 
-        # Get the most recent record for each unique target
+        # Get most recent record per unique target
         latest = history.sort_values('Date', ascending=False)\
                         .drop_duplicates(subset=['Company Name', 'URL', 'Role'], keep='first')
 
-        # Merge keeping original URL from targets as priority
+        # Merge — prioritize original clean URL from targets
         overview_df = df_targets[['Company Name', 'URL', 'Role']].copy()
-
-        # Merge only needed columns without suffix confusion
         overview_df = overview_df.merge(
             latest[['Company Name', 'URL', 'Role', 'Visa Sponsorship', 'Date']],
             on=['Company Name', 'URL', 'Role'],
             how='left'
         )
 
-        # Clean up: fill missing values
         overview_df['Visa Sponsorship'] = overview_df['Visa Sponsorship'].fillna('Not checked yet')
         overview_df['Date'] = overview_df['Date'].fillna('—')
 
-        # Final columns order
         overview_df = overview_df[['Company Name', 'Role', 'URL', 'Visa Sponsorship', 'Date']]
         overview_df = overview_df.rename(columns={'Date': 'Last Checked'})
 
@@ -141,18 +137,16 @@ with tab_overview:
                              .set_properties(**{
                                  'text-align': 'left',
                                  'white-space': 'normal',
-                                 'word-break': 'break-word'
+                                 'word-break': 'break-word',
+                                 'padding': '8px'
                              })
                              .set_table_styles([
                                  {'selector': 'th', 'props': [('font-weight', 'bold'), ('text-align', 'center')]},
-                                 {'selector': 'td', 'props': [('padding', '8px')]}
                              ]),
             use_container_width=True,
+            # Removed problematic display_text lambda — Streamlit will truncate long URLs automatically
             column_config={
-                "URL": st.column_config.LinkColumn(
-                    "URL",
-                    display_text=lambda x: x[:70] + "..." if len(x) > 70 else x
-                ),
+                "URL": st.column_config.LinkColumn("URL"),
                 "Visa Sponsorship": st.column_config.Column(width="medium"),
                 "Last Checked": st.column_config.Column(width="medium")
             }
